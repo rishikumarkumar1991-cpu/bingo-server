@@ -99,7 +99,8 @@ io.on('connection', (socket) => {
     socket.on('cellClicked', ({ roomCode, cellIndex }) => {
     const room = rooms[roomCode];
     const player = room?.players[socket.id];
-    // Make sure the cell hasn't already been correctly guessed by this player
+    
+    // Ignore clicks if the game isn't playing or the cell was already correctly guessed by this player
     if (!room || !player || room.gameState !== 'playing' || player.markedCells.has(cellIndex)) {
         return;
     }
@@ -107,27 +108,27 @@ io.on('connection', (socket) => {
     const cardWordIndex = player.bingoCard[cellIndex];
     const drawnWordIndex = room.currentWordIndex;
 
+    // --- NEW: Stop the current word's timer immediately, no matter the answer ---
+    clearInterval(room.wordTimerInterval);
+
     if (cardWordIndex === drawnWordIndex) {
         // --- LOGIC FOR CORRECT GUESS ---
         player.score += 10;
         player.markedCells.add(cellIndex);
         socket.emit('correctGuess', { cellIndex, newScore: player.score });
         io.to(roomCode).emit('playerUpdate', room.players);
-
-        // --- NEW: Immediately move to the next word! ---
-        clearInterval(room.wordTimerInterval); // Stop the current word's timer
-        
-        // Draw the next word after a short delay so players can see the result
-        setTimeout(() => {
-            drawNextWord(roomCode);
-        }, 1500); // 1.5 second delay before the next word
-
     } else {
         // --- LOGIC FOR INCORRECT GUESS ---
         player.score = Math.max(0, player.score - 5);
         socket.emit('incorrectGuess', { cellIndex, newScore: player.score });
         io.to(roomCode).emit('playerUpdate', room.players);
     }
+
+    // --- NEW: Draw the next word for everyone after a short delay ---
+    // This now runs for BOTH correct and incorrect answers.
+    setTimeout(() => {
+        drawNextWord(roomCode);
+    }, 1500); // 1.5 second delay to let players see the ✓ or ✗
 });
 
     // --- Disconnect Handling ---
