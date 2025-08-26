@@ -97,24 +97,38 @@ io.on('connection', (socket) => {
     });
 
     socket.on('cellClicked', ({ roomCode, cellIndex }) => {
-        const room = rooms[roomCode];
-        const player = room?.players[socket.id];
-        if (!room || !player || room.gameState !== 'playing') return;
+    const room = rooms[roomCode];
+    const player = room?.players[socket.id];
+    // Make sure the cell hasn't already been correctly guessed by this player
+    if (!room || !player || room.gameState !== 'playing' || player.markedCells.has(cellIndex)) {
+        return;
+    }
 
-        const cardWordIndex = player.bingoCard[cellIndex];
-        const drawnWordIndex = room.currentWordIndex;
+    const cardWordIndex = player.bingoCard[cellIndex];
+    const drawnWordIndex = room.currentWordIndex;
 
-        if (cardWordIndex === drawnWordIndex) {
-            player.score += 10;
-            player.markedCells.add(cellIndex);
-            socket.emit('correctGuess', { cellIndex, newScore: player.score });
-            io.to(roomCode).emit('playerUpdate', room.players);
-        } else {
-            player.score = Math.max(0, player.score - 5);
-            socket.emit('incorrectGuess', { cellIndex, newScore: player.score });
-            io.to(roomCode).emit('playerUpdate', room.players);
-        }
-    });
+    if (cardWordIndex === drawnWordIndex) {
+        // --- LOGIC FOR CORRECT GUESS ---
+        player.score += 10;
+        player.markedCells.add(cellIndex);
+        socket.emit('correctGuess', { cellIndex, newScore: player.score });
+        io.to(roomCode).emit('playerUpdate', room.players);
+
+        // --- NEW: Immediately move to the next word! ---
+        clearInterval(room.wordTimerInterval); // Stop the current word's timer
+        
+        // Draw the next word after a short delay so players can see the result
+        setTimeout(() => {
+            drawNextWord(roomCode);
+        }, 1500); // 1.5 second delay before the next word
+
+    } else {
+        // --- LOGIC FOR INCORRECT GUESS ---
+        player.score = Math.max(0, player.score - 5);
+        socket.emit('incorrectGuess', { cellIndex, newScore: player.score });
+        io.to(roomCode).emit('playerUpdate', room.players);
+    }
+});
 
     // --- Disconnect Handling ---
     socket.on('disconnect', () => {
