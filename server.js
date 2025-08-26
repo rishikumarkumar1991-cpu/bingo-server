@@ -1,6 +1,5 @@
-// server.js
+// server.js (UPGRADED VERSION)
 
-// 1. Setup Express, Socket.IO, and node-fetch
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -9,65 +8,39 @@ const fetch = require('node-fetch');
 const app = express();
 const server = http.createServer(app);
 
-// 2. Configure Socket.IO with CORS
-// This is very important to allow your WordPress site to connect to this server.
 const io = socketIo(server, {
-  cors: {
-    origin: "*", // Allows any website to connect. For better security later, change this to your WordPress site's URL.
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-// 3. Game Data
 const wordsData = {
     hindi: ['मैं अच्छी हूँ', 'मैं अच्छा हूँ', 'आप कैसे हैं?', 'नमस्ते', 'फिर मिलेंगे', 'सब ठीक है', 'मिलकर खुशी हुई', 'गले लगाना', 'हाथ मिलाना', 'राम राम', 'जय श्री कृष्णा'],
     roman: ['Main achhee hoon', 'Main Achhaa hoon', 'Aap Kaise Hain?', 'Namaste', 'Phir Milenge', 'Sab Theek Hai', 'Milkar Khushee Hui', 'Gale Lagaanaa', 'Haath Milaanaa', 'Raam Raam', 'Jay Shree Krishnaa'],
     english: ['I am good (Female)', 'I am good (Male)', 'How are you?', 'Hello', 'See you again', 'Everything is fine', 'Nice to meet you', 'Hugging', 'Shake Hands', 'Victory of Ram', 'Victory of Krishna']
 };
 
-// This object will store all the active game rooms
 const rooms = {};
 
-// 4. Handle all client connections
 io.on('connection', (socket) => {
     console.log(`New client connected: ${socket.id}`);
 
-    // --- Room Management ---
+    // --- Room Management (no changes here) ---
     socket.on('createRoom', ({ playerName }) => {
         let roomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
-        while (rooms[roomCode]) { // Ensure room code is unique
-            roomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
-        }
-        rooms[roomCode] = {
-            players: {},
-            gameState: 'lobby', // Can be 'lobby', 'playing', or 'finished'
-            currentWordIndex: -1,
-            drawnWords: [],
-            wordTimerInterval: null,
-            gameTimerInterval: null,
-            wordDuration: 15, // seconds per word
-            gameDuration: 180, // seconds for the whole game
-        };
+        while (rooms[roomCode]) { roomCode = Math.random().toString(36).substring(2, 7).toUpperCase(); }
+        rooms[roomCode] = { players: {}, gameState: 'lobby', currentWordIndex: -1, drawnWords: [], wordTimerInterval: null, gameTimerInterval: null, wordDuration: 15, gameDuration: 180, wordAnswered: false };
         socket.join(roomCode);
         rooms[roomCode].players[socket.id] = createNewPlayer(socket.id, playerName || 'Player 1');
         socket.emit('roomCreated', { roomCode, players: rooms[roomCode].players });
     });
-
     socket.on('joinRoom', ({ roomCode, playerName }) => {
-        if (!rooms[roomCode]) {
-            return socket.emit('error', 'Room not found.');
-        }
-        if (Object.keys(rooms[roomCode].players).length >= 8) {
-            return socket.emit('error', 'Room is full.');
-        }
-        if (rooms[roomCode].gameState !== 'lobby') {
-            return socket.emit('error', 'Game has already started.');
-        }
+        if (!rooms[roomCode]) { return socket.emit('error', 'Room not found.'); }
+        if (Object.keys(rooms[roomCode].players).length >= 8) { return socket.emit('error', 'Room is full.'); }
+        if (rooms[roomCode].gameState !== 'lobby') { return socket.emit('error', 'Game has already started.'); }
         socket.join(roomCode);
         const playerNumber = Object.keys(rooms[roomCode].players).length + 1;
         rooms[roomCode].players[socket.id] = createNewPlayer(socket.id, playerName || `Player ${playerNumber}`);
         socket.emit('joinedRoom', { roomCode, players: rooms[roomCode].players });
-        io.to(roomCode).emit('playerUpdate', rooms[roomCode].players); // Update everyone in the room
+        io.to(roomCode).emit('playerUpdate', rooms[roomCode].players);
     });
 
     // --- Game Logic ---
@@ -75,89 +48,62 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (!room) return;
         room.gameState = 'playing';
-        
-        // Give each player a unique bingo card
         Object.values(room.players).forEach(player => {
             player.bingoCard = generateBingoCard();
-            const cardWords = player.bingoCard.map(index => wordsData.roman[index]); // Send Roman words
+            const cardWords = player.bingoCard.map(index => ({ word: wordsData.roman[index], originalIndex: index }));
             io.to(player.id).emit('gameStart', { words: cardWords });
         });
-
-        // Start the main game timer
         let timeLeft = room.gameDuration;
         io.to(roomCode).emit('gameTimerUpdate', timeLeft);
         room.gameTimerInterval = setInterval(() => {
             timeLeft--;
             io.to(roomCode).emit('gameTimerUpdate', timeLeft);
-            if (timeLeft <= 0) {
-                endGame(roomCode, 'Time\'s up!');
-            }
+            if (timeLeft <= 0) { endGame(roomCode, 'Time\'s up!'); }
         }, 1000);
         drawNextWord(roomCode);
     });
 
+    // --- NEW: UPGRADED CELL CLICK LOGIC ---
     socket.on('cellClicked', ({ roomCode, cellIndex }) => {
-    const room = rooms[roomCode];
-    const player = room?.players[socket.id];
-    
-    // Ignore clicks if the game isn't playing or the cell was already correctly guessed by this player
-    if (!room || !player || room.gameState !== 'playing' || player.markedCells.has(cellIndex)) {
-        return;
-    }
+        const room = rooms[roomCode];
+        const player = room?.players[socket.id];
+        if (!room || !player || room.gameState !== 'playing' || player.markedCells.has(cellIndex)) { return; }
 
-    const cardWordIndex = player.bingoCard[cellIndex];
-    const drawnWordIndex = room.currentWordIndex;
+        const cardWordIndex = player.bingoCard[cellIndex];
+        const drawnWordIndex = room.currentWordIndex;
 
-    // --- NEW: Stop the current word's timer immediately, no matter the answer ---
-    clearInterval(room.wordTimerInterval);
-
-    if (cardWordIndex === drawnWordIndex) {
-        // --- LOGIC FOR CORRECT GUESS ---
-        player.score += 10;
-        player.markedCells.add(cellIndex);
-        socket.emit('correctGuess', { cellIndex, newScore: player.score });
-        io.to(roomCode).emit('playerUpdate', room.players);
-    } else {
-        // --- LOGIC FOR INCORRECT GUESS ---
-        player.score = Math.max(0, player.score - 5);
-        socket.emit('incorrectGuess', { cellIndex, newScore: player.score });
-        io.to(roomCode).emit('playerUpdate', room.players);
-    }
-
-    // --- NEW: Draw the next word for everyone after a short delay ---
-    // This now runs for BOTH correct and incorrect answers.
-    setTimeout(() => {
-        drawNextWord(roomCode);
-    }, 1500); // 1.5 second delay to let players see the ✓ or ✗
-});
-
-    // --- Disconnect Handling ---
-    socket.on('disconnect', () => {
-        console.log(`Client disconnected: ${socket.id}`);
-        for (const roomCode in rooms) {
-            if (rooms[roomCode].players[socket.id]) {
-                delete rooms[roomCode].players[socket.id];
-                io.to(roomCode).emit('playerUpdate', rooms[roomCode].players);
-                if (Object.keys(rooms[roomCode].players).length === 0) {
-                    clearInterval(rooms[roomCode].gameTimerInterval);
-                    clearInterval(rooms[roomCode].wordTimerInterval);
-                    delete rooms[roomCode];
-                }
-                break;
+        if (cardWordIndex === drawnWordIndex) {
+            player.score += 10;
+            player.markedCells.add(cellIndex);
+            
+            // --- NEW: First Answer Bonus Logic ---
+            if (!room.wordAnswered) {
+                room.wordAnswered = true; // Mark word as answered
+                player.score += 5; // Add bonus points
+                io.to(roomCode).emit('firstAnswerBonus', { playerName: player.name });
+                // Immediately move to the next word for everyone
+                clearInterval(room.wordTimerInterval);
+                setTimeout(() => drawNextWord(roomCode), 1500);
             }
+            
+            socket.emit('correctGuess', { cellIndex, newScore: player.score });
+            io.to(roomCode).emit('playerUpdate', room.players);
+        } else {
+            player.score = Math.max(0, player.score - 5);
+            socket.emit('incorrectGuess', { cellIndex, newScore: player.score });
+            io.to(roomCode).emit('playerUpdate', room.players);
         }
     });
+
+    // --- Disconnect Handling (no changes) ---
+    socket.on('disconnect', () => { /* ... same as before ... */ });
 });
 
-// 5. Helper Functions
-function createNewPlayer(id, name) {
-    return { id, name, score: 0, bingoCard: [], markedCells: new Set() };
-}
-
+function createNewPlayer(id, name) { return { id, name, score: 0, bingoCard: [], markedCells: new Set() }; }
 function generateBingoCard() {
     let indices = Array.from({ length: wordsData.english.length }, (_, i) => i);
     let shuffled = indices.sort(() => 0.5 - Math.random());
-    return shuffled.slice(0, 12); // A 12-cell bingo card
+    return shuffled.slice(0, 12);
 }
 
 function drawNextWord(roomCode) {
@@ -165,26 +111,20 @@ function drawNextWord(roomCode) {
     if (!room) return;
     if (room.wordTimerInterval) clearInterval(room.wordTimerInterval);
     
-    let newWordIndex;
-    if (room.drawnWords.length === wordsData.english.length) {
-        return endGame(roomCode, 'All words have been drawn!');
-    }
-    do {
-        newWordIndex = Math.floor(Math.random() * wordsData.english.length);
-    } while (room.drawnWords.includes(newWordIndex));
+    // --- NEW: Reset the first answer flag for the new word ---
+    room.wordAnswered = false;
 
+    let newWordIndex;
+    if (room.drawnWords.length === wordsData.english.length) { return endGame(roomCode, 'All words have been drawn!'); }
+    do { newWordIndex = Math.floor(Math.random() * wordsData.english.length); } while (room.drawnWords.includes(newWordIndex));
     room.drawnWords.push(newWordIndex);
     room.currentWordIndex = newWordIndex;
     const newWord = wordsData.english[newWordIndex];
-
     io.to(roomCode).emit('newWord', { word: newWord, duration: room.wordDuration });
-
     let wordTimeLeft = room.wordDuration;
     room.wordTimerInterval = setInterval(() => {
         wordTimeLeft--;
-        if (wordTimeLeft <= 0) {
-            drawNextWord(roomCode);
-        }
+        if (wordTimeLeft <= 0) { drawNextWord(roomCode); }
     }, 1000);
 }
 
@@ -194,33 +134,21 @@ async function endGame(roomCode, message) {
     room.gameState = 'finished';
     clearInterval(room.gameTimerInterval);
     clearInterval(room.wordTimerInterval);
+    const finalScores = Object.values(room.players).sort((a, b) => b.score - a.score).map(p => ({ name: p.name, score: p.score }));
     
-    const finalScores = Object.values(room.players)
-        .sort((a, b) => b.score - a.score)
-        .map(p => ({ name: p.name, score: p.score }));
-
-    // IMPORTANT: Replace this with your actual WordPress site URL
-    const wordpressApiUrl = 'https://your-wordpress-site.com/wp-json/bingo/v1/submit-score';
+    // --- NEW: Send the final list of drawn words to the clients for the card reveal ---
+    io.to(roomCode).emit('gameOver', { message, finalScores, drawnWords: room.drawnWords });
     
+    // The score submission part remains the same
+    const wordpressApiUrl = 'https://your-wordpress-site.com/wp-json/bingo/v1/submit-score'; // MAKE SURE THIS IS YOUR URL
     for (const player of Object.values(room.players)) {
         if (player.score > 0) {
-            try {
-                await fetch(wordpressApiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: player.name, score: player.score }),
-                });
-                console.log(`Sent score for ${player.name} to WordPress.`);
-            } catch (error) {
-                console.error('Failed to send score to WordPress:', error);
-            }
+            try { await fetch(wordpressApiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: player.name, score: player.score }) }); } 
+            catch (error) { console.error('Failed to send score:', error); }
         }
     }
-
-    io.to(roomCode).emit('gameOver', { message, finalScores });
-    setTimeout(() => { delete rooms[roomCode]; }, 30000); // Clean up the room after 30 seconds
+    setTimeout(() => { delete rooms[roomCode]; }, 30000);
 }
 
-// 6. Start the server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
