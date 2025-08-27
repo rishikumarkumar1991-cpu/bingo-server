@@ -1,17 +1,13 @@
 {
-  "name": "bingo-server-project",
+  "name": "hindi-bingo-multiplayer",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A multiplayer version of the Hindi Vocabulary Bingo game.",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "express": "^5.1.0",
-    "node-fetch": "^3.3.2",
-    "socket.io": "^4.8.1"
+    "express": "^4.17.1",
+    "socket.io": "^4.4.0"
   }
 }
